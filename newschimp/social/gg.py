@@ -108,24 +108,32 @@ class WebSession():
 
     def get_message_text(self, group_id, topic_id, message_id):
 
-        text = self._get_message_text_from_cache(group_id, topic_id, message_id)
+        url = GOOGLE_GROUP_RAW_URL.format(group_id, topic_id, message_id)
+        try:
+            response = requests.get(url, cookies=self._cookies)
+            text = response.text
 
-        if text is None:
-            url = GOOGLE_GROUP_RAW_URL.format(group_id, topic_id, message_id)
-            try:
-                response = requests.get(url, cookies=self._cookies)
-                text = response.text
-                self._save_message_text_in_cache(text, group_id, topic_id, message_id)
-            except IOError:
-                LOGGER.error('Failed to fetch text from: {}'.format(url))
-                text = ''
+        except IOError:
+            LOGGER.error('Failed to fetch text from: {}'.format(url))
+            text = ''
 
         return text
 
-    def get_messages_in_page(self, group_id, topic_id, message_id):
+    def get_messages_in_page(self, group_id, topic_id, page_number):
+        page_number = str(page_number)
+        for message_id in self._get_message_ids(group_id, topic_id, page_number):
+            text = self._get_message_text_from_cache(
+                group_id, topic_id, message_id, page_number
+            )
 
-        for message_id in self._get_message_ids(group_id, topic_id, message_id):
-            yield self.get_message_text(group_id, topic_id, message_id)
+            if text is None:
+                text = self.get_message_text(group_id, topic_id, message_id)
+
+            self._save_message_text_in_cache(
+                text, group_id, topic_id, message_id, page_number
+            )
+
+            yield text
 
 
     #### Private interface ####################################################
@@ -144,7 +152,7 @@ class WebSession():
             proceed.click()
         return True
 
-    def _get_message_ids(self, group_id, topic_id, page_number=1):
+    def _get_message_ids(self, group_id, topic_id, page_number):
         message_ids = self._get_message_ids_from_cache(
             group_id, topic_id, page_number
         )
@@ -171,8 +179,8 @@ class WebSession():
         self._cache_data.update(new_data)
         self._save_cache()
 
-    def _get_message_text_from_cache(self, group_id, topic_id, message_id):
-        message = join(self.cache_dir, group_id, topic_id, message_id)
+    def _get_message_text_from_cache(self, group_id, topic_id, message_id, page_number):
+        message = join(self.cache_dir, group_id, topic_id, page_number, message_id)
 
         if exists(message):
             with open(message) as f:
@@ -182,12 +190,12 @@ class WebSession():
 
         return text
 
-    def _save_message_text_in_cache(self, text, group_id, topic_id, message_id):
-        topic_dir = join(self.cache_dir, group_id, topic_id)
-        if not exists(topic_dir):
-            os.makedirs(topic_dir)
+    def _save_message_text_in_cache(self, text, group_id, topic_id, message_id, page_number):
+        page_dir = join(self.cache_dir, group_id, topic_id, page_number)
+        if not exists(page_dir):
+            os.makedirs(page_dir)
 
-        with open(join(topic_dir, message_id), 'w') as f:
+        with open(join(page_dir, message_id), 'w') as f:
             f.write(text)
 
     def _get_message_ids_on_page(self):
