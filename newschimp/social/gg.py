@@ -256,13 +256,3 @@ class WebSession():
 @click.pass_context
 def cli(ctx, group):
     '''Google Groups curator'''
-
-    #from getpass import getpass
-
-    username = 'punchagan'
-    password = '' #getpass('Password for %s@gmail.com: ' % username)
-    session = WebSession(username, password)
-    for message in session.get_messages_in_page(group, '4JaKHpOy__o', 1):
-        print(message)
-
-    session.close()
