@@ -120,17 +120,16 @@ class WebSession():
         return text
 
     def get_messages_in_page(self, group_id, topic_id, page_number):
-        page_number = str(page_number)
         for message_id in self._get_message_ids(group_id, topic_id, page_number):
             text = self._get_message_text_from_cache(
-                group_id, topic_id, message_id, page_number
+                group_id, topic_id, message_id, str(page_number)
             )
 
             if text is None:
                 text = self.get_message_text(group_id, topic_id, message_id)
 
             self._save_message_text_in_cache(
-                text, group_id, topic_id, message_id, page_number
+                text, group_id, topic_id, message_id, str(page_number)
             )
 
             yield text
