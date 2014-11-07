@@ -19,10 +19,14 @@ import gettext
 import logging
 from datetime import date
 import json
+import os
 from os.path import exists, join
 from urllib.request import quote
+import subprocess
+import tempfile
 
 import click
+import requests
 from selenium import webdriver
 from selenium.common import exceptions
 
@@ -71,7 +75,14 @@ class WebSession():
         self.password = password
         self.cache_dir = 'cache'
         self.cache_index = join(self.cache_dir, 'cache.json')
+
         self._cache_data = self._read_cache()
+        self._cookies = self._parse_cookies()
+
+        if len(self._cookies) == 0:
+            # fixme: What about expired cookies?
+            # currently, the user should just manually delete the cookie file.
+            self.login()
 
     def login(self):
         # fixme: this url means we are always prompted to login...
@@ -92,7 +103,34 @@ class WebSession():
             passwd.send_keys(password)
             signin.click()
 
-    def click_adult_warning_if_appeared(self):
+    def close(self):
+        self.browser.quit()
+
+    def get_message_text(self, group_id, topic_id, message_id):
+
+        text = self._get_message_text_from_cache(group_id, topic_id, message_id)
+
+        if text is None:
+            url = GOOGLE_GROUP_RAW_URL.format(group_id, topic_id, message_id)
+            try:
+                response = requests.get(url, cookies=self._cookies)
+                text = response.text
+                self._save_message_text_in_cache(text, group_id, topic_id, message_id)
+            except IOError:
+                LOGGER.error('Failed to fetch text from: {}'.format(url))
+                text = ''
+
+        return text
+
+    def get_messages_in_page(self, group_id, topic_id, message_id):
+
+        for message_id in self._get_message_ids(group_id, topic_id, message_id):
+            yield self.get_message_text(group_id, topic_id, message_id)
+
+
+    #### Private interface ####################################################
+
+    def _click_adult_warning_if_appeared(self):
         try:
             adult = self.browser.find_element_by_partial_link_text(
                 'do not want to view this content'
@@ -106,10 +144,7 @@ class WebSession():
             proceed.click()
         return True
 
-    def close(self):
-        self.browser.quit()
-
-    def get_message_urls(self, group_id, topic_id, page_number=1):
+    def _get_message_ids(self, group_id, topic_id, page_number=1):
         message_ids = self._get_message_ids_from_cache(
             group_id, topic_id, page_number
         )
@@ -117,19 +152,14 @@ class WebSession():
         if message_ids is None:
             page_url = self._get_page_url(group_id, topic_id, page_number)
             self.browser.get(page_url)
-            self.click_adult_warning_if_appeared()
+            self._click_adult_warning_if_appeared()
             message_ids = self._get_message_ids_on_page()
 
-        message_urls = [
-            GOOGLE_GROUP_RAW_URL.format(group_id, topic_id, message_id)
-            for message_id in message_ids
-        ]
+            self._put_message_ids_in_cache(
+                group_id, topic_id, page_number, message_ids
+            )
 
-        self._put_message_ids_in_cache(
-            group_id, topic_id, page_number, message_ids
-        )
-
-        return message_urls
+        return message_ids
 
     def _get_message_ids_from_cache(self, group_id, topic_id, page_number):
         topic_cache = self._cache_data.get(group_id, {}).get(topic_id, {})
@@ -140,6 +170,25 @@ class WebSession():
         new_data = {group_id: {topic_id: {page_number: message_ids}}}
         self._cache_data.update(new_data)
         self._save_cache()
+
+    def _get_message_text_from_cache(self, group_id, topic_id, message_id):
+        message = join(self.cache_dir, group_id, topic_id, message_id)
+
+        if exists(message):
+            with open(message) as f:
+                text = f.read()
+        else:
+            text = None
+
+        return text
+
+    def _save_message_text_in_cache(self, text, group_id, topic_id, message_id):
+        topic_dir = join(self.cache_dir, group_id, topic_id)
+        if not exists(topic_dir):
+            os.makedirs(topic_dir)
+
+        with open(join(topic_dir, message_id), 'w') as f:
+            f.write(text)
 
     def _get_message_ids_on_page(self):
         posts = self.browser.find_elements_by_xpath('//table[@role="listitem"]')
@@ -177,6 +226,23 @@ class WebSession():
         with open(self.cache_index, 'w') as f:
             json.dump(self._cache_data, f, indent=2)
 
+    def _parse_cookies(self):
+        if exists('cookies.txt'):
+            with tempfile.NamedTemporaryFile(delete=False) as f:
+                f.write(b'console.log(JSON.stringify(phantom.cookies));phantom.exit()')
+            output = subprocess.check_output(['phantomjs', COOKIES_FILE_ARG, f.name])
+            cookies = json.loads(output.strip().decode('utf8'))
+            cookies = {
+                cookie['name']: cookie['value'] for cookie in cookies
+
+                if 'google.com' in cookie['domain']
+            }
+
+        else:
+            cookies = {}
+
+        return cookies
+
 
 @click.command()
 @click.option('--group', help='Group ID')
@@ -189,8 +255,7 @@ def cli(ctx, group):
     username = 'punchagan'
     password = '' #getpass('Password for %s@gmail.com: ' % username)
     session = WebSession(username, password)
-    # fixme: parse cookie file, and check if we need to login?
-    # or try going to page, detect error and then call login.
-    # session.login()
-    print(session.get_message_urls(group, '4JaKHpOy__o', 1))
+    for message in session.get_messages_in_page(group, '4JaKHpOy__o', 1):
+        print(message)
+
     session.close()
