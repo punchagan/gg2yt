@@ -18,19 +18,16 @@ Terminology:
 import gettext
 import logging
 from datetime import date
+import json
+from os.path import exists, join
+from urllib.request import quote
 
 import click
 from selenium import webdriver
 from selenium.common import exceptions
 
-from urllib.request import quote
-
 t = gettext.translation('gg', 'locale', fallback=True)
 _ = t.gettext
-
-#fixme: move to settings, later...
-COOKIES_FILE = 'cookies.txt'
-COOKIES_FILE_ARG = '--cookies-file=%s' % COOKIES_FILE
 
 MONTHS = {
     _('january'): 1,
@@ -46,11 +43,15 @@ MONTHS = {
     _('november'): 11,
     _('december'): 12,
 }
+
 GOOGLE_GROUP_BASE = 'https://groups.google.com/forum/'
 GOOGLE_GROUP_URL = GOOGLE_GROUP_BASE + '#!forum/{}'
+GOOGLE_GROUP_RAW_URL = GOOGLE_GROUP_BASE + 'message/raw?msg={}/{}/{}'
+#fixme: move to settings, later...
+COOKIES_FILE = 'cookies.txt'
+COOKIES_FILE_ARG = '--cookies-file=%s' % COOKIES_FILE
+
 LOGGER = logging.getLogger(__name__)
-
-
 
 def date_parse(raw_date):
     '''Make some sense for default Group datetime string'''
@@ -68,6 +69,9 @@ class WebSession():
         self.browser.set_window_size(1024, 768)
         self.username = username
         self.password = password
+        self.cache_dir = 'cache'
+        self.cache_index = join(self.cache_dir, 'cache.json')
+        self._cache_data = self._read_cache()
 
     def login(self):
         # fixme: this url means we are always prompted to login...
@@ -106,28 +110,38 @@ class WebSession():
         self.browser.quit()
 
     def get_message_urls(self, group_id, topic_id, page_number=1):
-        topic_url = GOOGLE_GROUP_URL.format(group_id).replace('#!forum', '#!topic')
-        start = (page_number-1) * 25 + 1
-        end = page_number * 25
-        topic_path = '/{}/discussion[{}-{}-false]'.format(topic_id, start, end)
-        url = topic_url + quote(topic_path)
-        browser = self.browser
+        message_ids = self._get_message_ids_from_cache(
+            group_id, topic_id, page_number
+        )
 
-        browser.get(url)
-        self.click_adult_warning_if_appeared()
-
-        message_ids = self.get_message_ids()
-        RAW_URL = 'https://groups.google.com/forum/message/raw?msg={}/{}/{}'
+        if message_ids is None:
+            page_url = self._get_page_url(group_id, topic_id, page_number)
+            self.browser.get(page_url)
+            self.click_adult_warning_if_appeared()
+            message_ids = self._get_message_ids_on_page()
 
         message_urls = [
-            RAW_URL.format(group_id, topic_id, message_id)
-
+            GOOGLE_GROUP_RAW_URL.format(group_id, topic_id, message_id)
             for message_id in message_ids
         ]
 
+        self._put_message_ids_in_cache(
+            group_id, topic_id, page_number, message_ids
+        )
+
         return message_urls
 
-    def get_message_ids(self):
+    def _get_message_ids_from_cache(self, group_id, topic_id, page_number):
+        topic_cache = self._cache_data.get(group_id, {}).get(topic_id, {})
+        message_ids = topic_cache.get(str(page_number), [])
+        return message_ids if len(message_ids) == 25 else None
+
+    def _put_message_ids_in_cache(self, group_id, topic_id, page_number, message_ids):
+        new_data = {group_id: {topic_id: {page_number: message_ids}}}
+        self._cache_data.update(new_data)
+        self._save_cache()
+
+    def _get_message_ids_on_page(self):
         posts = self.browser.find_elements_by_xpath('//table[@role="listitem"]')
         message_snippets = [
             post.find_element_by_xpath(
@@ -136,6 +150,7 @@ class WebSession():
 
             for post in posts
         ]
+
         n = len('message_snippet_')
         message_ids = [
             message.get_attribute('id')[n:] for message in message_snippets
@@ -143,6 +158,24 @@ class WebSession():
 
         return message_ids
 
+    def _get_page_url(self, group_id, topic_id, page_number):
+        topic_url = GOOGLE_GROUP_URL.format(group_id).replace('#!forum', '#!topic')
+        start, end = (page_number-1) * 25 + 1, page_number * 25
+        topic_path = '/{}/discussion[{}-{}-false]'.format(topic_id, start, end)
+        return topic_url + quote(topic_path)
+
+    def _read_cache(self):
+        if exists(self.cache_index):
+            with open(self.cache_index) as f:
+                data = json.load(f)
+        else:
+            data = {}
+
+        return data
+
+    def _save_cache(self):
+        with open(self.cache_index, 'w') as f:
+            json.dump(self._cache_data, f, indent=2)
 
 
 @click.command()
