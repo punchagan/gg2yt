@@ -21,7 +21,10 @@ from datetime import date
 import json
 import os
 from os.path import exists, join
-from urllib.request import quote
+try:
+    from urllib.request import quote
+except ImportError:
+    from urllib import quote
 import subprocess
 import tempfile
 
@@ -132,7 +135,7 @@ class WebSession():
                 text, group_id, topic_id, message_id, str(page_number)
             )
 
-            yield text
+            yield message_id, text
 
 
     #### Private interface ####################################################
