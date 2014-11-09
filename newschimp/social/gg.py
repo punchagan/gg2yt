@@ -177,7 +177,7 @@ class WebSession():
         return message_ids if len(message_ids) == 25 else None
 
     def _put_message_ids_in_cache(self, group_id, topic_id, page_number, message_ids):
-        self._cache_data[group_id][topic_id][page_number] = message_ids
+        self._cache_data.setdefault(group_id, {}).setdefault(topic_id, {})[page_number] = message_ids
         self._save_cache()
 
     def _get_message_text_from_cache(self, group_id, topic_id, message_id, page_number):
