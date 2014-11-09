@@ -80,7 +80,7 @@ def add_video_to_playlist(yt_client, playlist_id, video_id):
 
 
 if __name__ == '__main__':
-    from newschimp.social.gg import WebSession
+    from gg import WebSession
     from settings import (group_id, topic_id, playlist_id, username, password, developer_key)
 
     yt_client = get_yt_client(username, password, developer_key)
